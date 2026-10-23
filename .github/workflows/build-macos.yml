@@ -1,0 +1,69 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and package for Apple Silicon
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show macOS and Swift versions
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+
+      - name: Build release executable
+        run: swift build --configuration release
+
+      - name: Package app and create DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP="build/Lua Mac.app"
+          STAGING="build/dmg"
+          DMG="build/Lua-Mac-macos26-arm64.dmg"
+
+          mkdir -p "$APP/Contents/MacOS" "$STAGING"
+          cp .build/release/MacWineManager "$APP/Contents/MacOS/MacWineManager"
+          cp Packaging/Info.plist "$APP/Contents/Info.plist"
+          ln -s /Applications "$STAGING/Applications"
+          ditto "$APP" "$STAGING/Lua Mac.app"
+
+          codesign --force --deep --sign - "$STAGING/Lua Mac.app"
+          codesign --verify --deep --strict "$STAGING/Lua Mac.app"
+
+          ARCHS="$(lipo -archs "$STAGING/Lua Mac.app/Contents/MacOS/MacWineManager")"
+          echo "Built architectures: $ARCHS"
+          [[ "$ARCHS" == *arm64* ]]
+
+          hdiutil create \
+            -volname "Lua Mac" \
+            -srcfolder "$STAGING" \
+            -ov \
+            -format UDZO \
+            "$DMG"
+
+          hdiutil verify "$DMG"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lua-Mac-macos26-arm64
+          path: build/Lua-Mac-macos26-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
